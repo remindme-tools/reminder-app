@@ -231,10 +231,10 @@ category_colors: Record<string, string>;
 After deploying:
 
 1. **Authentication → URL Configuration → Site URL:**
-   `https://<github-username>.github.io/<repo-name>`
+   `https://remindme-tools.github.io/reminder-app/`
 
 2. **Authentication → URL Configuration → Redirect URLs (add):**
-   `https://<github-username>.github.io/<repo-name>/**`
+   `https://remindme-tools.github.io/reminder-app/**`
 
 These ensure password-reset emails link back to the live app, not localhost.
 
