@@ -1,5 +1,6 @@
 export type ItemType = "repeating" | "expiry" | "renewal";
 export type RepeatUnit = "days" | "weeks" | "months" | "years";
+export type NotifyVia = "email" | "push" | "both";
 
 export interface Item {
   id: string;
@@ -14,6 +15,7 @@ export interface Item {
   cost: number | null;
   photo_path: string | null;
   done_at: string | null;
+  notify_via: NotifyVia;
 }
 
 export type ItemInput = Omit<Item, "id" | "done_at">;
