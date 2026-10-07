@@ -1,0 +1,3 @@
+# The scheduled job authenticates with its own secret (CRON_SECRET), not a user login.
+[functions.daily-reminders]
+verify_jwt = false
