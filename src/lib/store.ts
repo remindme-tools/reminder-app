@@ -5,24 +5,32 @@ import { isRepeating, rollForward, todayLocal } from "./dates";
 const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const key = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 
-/** With no Supabase keys the app runs in "demo mode": data stays on this device only. */
 export const demoMode = !url || !key;
-const supabase: SupabaseClient | null = demoMode ? null : createClient(url!, key!);
+const supabase: SupabaseClient | null = demoMode
+  ? null
+  : createClient(url!, key!, {
+      auth: { persistSession: true, autoRefreshToken: true, storageKey: "remindme-auth" },
+    });
 
 export interface Profile {
   email_reminders: boolean;
   timezone: string;
+  category_colors: Record<string, string>;
 }
 
 export interface Session {
   email: string;
+  needsPasswordReset?: boolean;
 }
 
 export interface Store {
+  subscribeToAuth(cb: (session: Session | null) => void): () => void;
   getSession(): Promise<Session | null>;
   signIn(email: string, password: string): Promise<void>;
   signUp(email: string, password: string): Promise<{ needsConfirm: boolean }>;
   signOut(): Promise<void>;
+  resetPasswordForEmail(email: string): Promise<void>;
+  updatePassword(password: string): Promise<void>;
   list(): Promise<Item[]>;
   create(input: ItemInput): Promise<void>;
   update(id: string, input: ItemInput): Promise<void>;
@@ -37,11 +45,33 @@ export interface Store {
 }
 
 function nextDue(item: Item): string | null {
-  return isRepeating(item) ? rollForward(item.due_date, item.repeat_every!, item.repeat_unit!, todayLocal()) : null;
+  return isRepeating(item)
+    ? rollForward(item.due_date, item.repeat_every!, item.repeat_unit!, todayLocal())
+    : null;
 }
 
 // ---------- Supabase ----------
+let _explicitSignOut = false;
+
 const remote: Store = {
+  subscribeToAuth(cb) {
+    const {
+      data: { subscription },
+    } = supabase!.auth.onAuthStateChange((event, s) => {
+      if (event === "PASSWORD_RECOVERY" && s) {
+        cb({ email: s.user.email ?? "", needsPasswordReset: true });
+      } else if (s) {
+        cb({ email: s.user.email ?? "" });
+      } else if (event === "INITIAL_SESSION") {
+        cb(null);
+      } else if (event === "SIGNED_OUT" && _explicitSignOut) {
+        _explicitSignOut = false;
+        cb(null);
+      }
+      // TOKEN_REFRESH_FAILED and unexpected SIGNED_OUT: ignore — keep user logged in
+    });
+    return () => subscription.unsubscribe();
+  },
   async getSession() {
     const { data } = await supabase!.auth.getSession();
     return data.session ? { email: data.session.user.email ?? "" } : null;
@@ -56,12 +86,23 @@ const remote: Store = {
     return { needsConfirm: !data.session };
   },
   async signOut() {
+    _explicitSignOut = true;
     await supabase!.auth.signOut();
+  },
+  async resetPasswordForEmail(email) {
+    const { error } = await supabase!.auth.resetPasswordForEmail(email, {
+      redirectTo: window.location.origin + window.location.pathname,
+    });
+    if (error) throw error;
+  },
+  async updatePassword(password) {
+    const { error } = await supabase!.auth.updateUser({ password });
+    if (error) throw error;
   },
   async list() {
     const { data, error } = await supabase!.from("items").select("*").order("due_date");
     if (error) throw error;
-    return data as Item[];
+    return (data as Item[]).map((i) => ({ ...i, notify_via: i.notify_via ?? "both" }));
   },
   async create(input) {
     const { data: u } = await supabase!.auth.getUser();
@@ -78,7 +119,9 @@ const remote: Store = {
   },
   async markDone(item) {
     const next = nextDue(item);
-    const patch = next ? { due_date: next, done_at: null, last_done_at: new Date().toISOString() } : { done_at: new Date().toISOString() };
+    const patch = next
+      ? { due_date: next, done_at: null, last_done_at: new Date().toISOString() }
+      : { done_at: new Date().toISOString() };
     const { error } = await supabase!.from("items").update(patch).eq("id", item.id);
     if (error) throw error;
   },
@@ -89,29 +132,40 @@ const remote: Store = {
   async uploadPhoto(file) {
     const { data: u } = await supabase!.auth.getUser();
     const path = `${u.user!.id}/${crypto.randomUUID()}.jpg`;
-    const { error } = await supabase!.storage.from("photos").upload(path, file, { contentType: "image/jpeg" });
+    const { error } = await supabase!.storage
+      .from("photos")
+      .upload(path, file, { contentType: "image/jpeg" });
     if (error) throw error;
     return path;
   },
   async photoUrl(path) {
-    const { data, error } = await supabase!.storage.from("photos").createSignedUrl(path, 3600);
+    const { data, error } = await supabase!.storage
+      .from("photos")
+      .createSignedUrl(path, 3600);
     if (error) throw error;
     return data.signedUrl;
   },
   async getProfile() {
     const { data: u } = await supabase!.auth.getUser();
-    const { data } = await supabase!.from("profiles").select("*").eq("user_id", u.user!.id).maybeSingle();
-    const profile = {
+    const { data } = await supabase!
+      .from("profiles")
+      .select("*")
+      .eq("user_id", u.user!.id)
+      .maybeSingle();
+    const profile: Profile = {
       email_reminders: data?.email_reminders ?? true,
       timezone: data?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
+      category_colors: (data?.category_colors as Record<string, string>) ?? {},
     };
-    // First launch: remember this phone's time zone so the 7am email arrives at 7am for you.
-    if (!data?.timezone) await supabase!.from("profiles").upsert({ user_id: u.user!.id, ...profile });
+    if (!data?.timezone)
+      await supabase!.from("profiles").upsert({ user_id: u.user!.id, ...profile });
     return profile;
   },
   async saveProfile(p) {
     const { data: u } = await supabase!.auth.getUser();
-    const { error } = await supabase!.from("profiles").upsert({ user_id: u.user!.id, ...p });
+    const { error } = await supabase!
+      .from("profiles")
+      .upsert({ user_id: u.user!.id, ...p });
     if (error) throw error;
   },
   async savePushSubscription(sub) {
@@ -123,7 +177,10 @@ const remote: Store = {
     }
     const { error } = await supabase!
       .from("push_subscriptions")
-      .upsert({ user_id: uid, endpoint: sub.endpoint, subscription: sub }, { onConflict: "endpoint" });
+      .upsert(
+        { user_id: uid, endpoint: sub.endpoint, subscription: sub },
+        { onConflict: "endpoint" }
+      );
     if (error) throw error;
   },
 };
@@ -135,6 +192,11 @@ const read = (): Item[] => JSON.parse(localStorage.getItem(LS) ?? "[]");
 const write = (items: Item[]) => localStorage.setItem(LS, JSON.stringify(items));
 
 const demo: Store = {
+  subscribeToAuth(cb) {
+    const s = localStorage.getItem(LS_SESSION);
+    Promise.resolve().then(() => cb(s ? { email: "demo@this-device" } : null));
+    return () => {};
+  },
   async getSession() {
     return localStorage.getItem(LS_SESSION) ? { email: "demo@this-device" } : null;
   },
@@ -148,8 +210,10 @@ const demo: Store = {
   async signOut() {
     localStorage.removeItem(LS_SESSION);
   },
+  async resetPasswordForEmail() {},
+  async updatePassword() {},
   async list() {
-    return read();
+    return read().map((i) => ({ ...i, notify_via: i.notify_via ?? "both" }));
   },
   async create(input) {
     write([...read(), { ...input, id: crypto.randomUUID(), done_at: null }]);
@@ -162,7 +226,15 @@ const demo: Store = {
   },
   async markDone(item) {
     const next = nextDue(item);
-    write(read().map((i) => (i.id !== item.id ? i : next ? { ...i, due_date: next } : { ...i, done_at: new Date().toISOString() })));
+    write(
+      read().map((i) =>
+        i.id !== item.id
+          ? i
+          : next
+          ? { ...i, due_date: next }
+          : { ...i, done_at: new Date().toISOString() }
+      )
+    );
   },
   async undoDone(item) {
     write(read().map((i) => (i.id === item.id ? { ...i, done_at: null } : i)));
@@ -178,9 +250,16 @@ const demo: Store = {
     return path;
   },
   async getProfile() {
-    return { email_reminders: true, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone };
+    const raw = localStorage.getItem("remindme-demo-colors");
+    return {
+      email_reminders: true,
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      category_colors: raw ? (JSON.parse(raw) as Record<string, string>) : {},
+    };
   },
-  async saveProfile() {},
+  async saveProfile(p) {
+    localStorage.setItem("remindme-demo-colors", JSON.stringify(p.category_colors));
+  },
   async savePushSubscription() {},
 };
 
