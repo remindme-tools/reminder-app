@@ -1,6 +1,6 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { Item, ItemInput } from "../types";
-import { isRepeating, rollForward, todayLocal } from "./dates";
+import { isRepeating, rollForward, rollForwardAt, isSpecialUnit, todayLocal } from "./dates";
 
 const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const key = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
@@ -37,6 +37,7 @@ export interface Store {
   remove(id: string): Promise<void>;
   markDone(item: Item): Promise<void>;
   undoDone(item: Item): Promise<void>;
+  snooze(id: string, snoozedUntil: string | null): Promise<void>;
   uploadPhoto(file: Blob): Promise<string>;
   photoUrl(path: string): Promise<string>;
   getProfile(): Promise<Profile>;
@@ -44,10 +45,17 @@ export interface Store {
   savePushSubscription(sub: PushSubscriptionJSON | null): Promise<void>;
 }
 
-function nextDue(item: Item): string | null {
-  return isRepeating(item)
-    ? rollForward(item.due_date, item.repeat_every!, item.repeat_unit!, todayLocal())
-    : null;
+/** Compute the next due_date + due_at for a repeating item after it is marked done. */
+function nextDueAt(item: Item): { due_date: string; due_at: string | null } | null {
+  if (!isRepeating(item)) return null;
+  const n = isSpecialUnit(item.repeat_unit) ? 1 : (item.repeat_every ?? 1);
+  const unit = item.repeat_unit!;
+  if (item.due_at) {
+    const nextAt = rollForwardAt(item.due_at, n, unit, new Date().toISOString());
+    return { due_date: nextAt.slice(0, 10), due_at: nextAt };
+  }
+  const next = rollForward(item.due_date, n, unit, todayLocal());
+  return { due_date: next, due_at: null };
 }
 
 // ---------- Supabase ----------
@@ -102,7 +110,12 @@ const remote: Store = {
   async list() {
     const { data, error } = await supabase!.from("items").select("*").order("due_date");
     if (error) throw error;
-    return (data as Item[]).map((i) => ({ ...i, notify_via: i.notify_via ?? "both" }));
+    return (data as Item[]).map((i) => ({
+      ...i,
+      notify_via: i.notify_via ?? "both",
+      due_at: i.due_at ?? null,
+      snoozed_until: i.snoozed_until ?? null,
+    }));
   },
   async create(input) {
     const { data: u } = await supabase!.auth.getUser();
@@ -118,15 +131,19 @@ const remote: Store = {
     if (error) throw error;
   },
   async markDone(item) {
-    const next = nextDue(item);
+    const next = nextDueAt(item);
     const patch = next
-      ? { due_date: next, done_at: null, last_done_at: new Date().toISOString() }
+      ? { due_date: next.due_date, due_at: next.due_at, snoozed_until: null, done_at: null, last_done_at: new Date().toISOString() }
       : { done_at: new Date().toISOString() };
     const { error } = await supabase!.from("items").update(patch).eq("id", item.id);
     if (error) throw error;
   },
   async undoDone(item) {
     const { error } = await supabase!.from("items").update({ done_at: null }).eq("id", item.id);
+    if (error) throw error;
+  },
+  async snooze(id, snoozedUntil) {
+    const { error } = await supabase!.from("items").update({ snoozed_until: snoozedUntil }).eq("id", id);
     if (error) throw error;
   },
   async uploadPhoto(file) {
@@ -213,7 +230,12 @@ const demo: Store = {
   async resetPasswordForEmail() {},
   async updatePassword() {},
   async list() {
-    return read().map((i) => ({ ...i, notify_via: i.notify_via ?? "both" }));
+    return read().map((i) => ({
+      ...i,
+      notify_via: i.notify_via ?? "both",
+      due_at: i.due_at ?? null,
+      snoozed_until: i.snoozed_until ?? null,
+    }));
   },
   async create(input) {
     write([...read(), { ...input, id: crypto.randomUUID(), done_at: null }]);
@@ -225,19 +247,21 @@ const demo: Store = {
     write(read().filter((i) => i.id !== id));
   },
   async markDone(item) {
-    const next = nextDue(item);
+    const next = nextDueAt(item);
     write(
       read().map((i) =>
-        i.id !== item.id
-          ? i
-          : next
-          ? { ...i, due_date: next }
+        i.id !== item.id ? i
+        : next
+          ? { ...i, due_date: next.due_date, due_at: next.due_at, snoozed_until: null, done_at: null }
           : { ...i, done_at: new Date().toISOString() }
       )
     );
   },
   async undoDone(item) {
     write(read().map((i) => (i.id === item.id ? { ...i, done_at: null } : i)));
+  },
+  async snooze(id, snoozedUntil) {
+    write(read().map((i) => (i.id === id ? { ...i, snoozed_until: snoozedUntil } : i)));
   },
   async uploadPhoto(file) {
     return await new Promise<string>((res) => {
