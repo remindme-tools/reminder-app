@@ -131,12 +131,16 @@ export function effectiveDueAt(item: Pick<Item, "due_date" | "due_at">): Date {
  * "today" — due later today
  * "week"  — due within the next 7 calendar days (not today)
  * "later" — more than 7 days away
+ *
+ * A snoozed item (snoozed_until > now) is grouped by its snooze expiry, not its
+ * original due time, so it never appears in the "now" bucket while still snoozed.
  */
 export function dueGroup(
-  item: Pick<Item, "due_date" | "due_at">,
+  item: Pick<Item, "due_date" | "due_at" | "snoozed_until">,
   now: Date = new Date()
 ): "now" | "today" | "week" | "later" {
-  const due = effectiveDueAt(item);
+  const snoozedUntil = item.snoozed_until ? new Date(item.snoozed_until) : null;
+  const due = snoozedUntil && snoozedUntil > now ? snoozedUntil : effectiveDueAt(item);
   if (due <= now) return "now";
   if (
     due.getFullYear() === now.getFullYear() &&

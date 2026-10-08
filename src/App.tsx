@@ -49,6 +49,7 @@ function Main({ email, onSignOut }: { email: string; onSignOut: () => void }) {
   );
   const [now, setNow] = useState(() => new Date());
   const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const pendingActionRef = useRef<{ snoozeId?: string; action?: string; itemId?: string } | null>(null);
 
   // Tick every minute so labels and groups stay live without a page refresh
   useEffect(() => {
@@ -80,33 +81,36 @@ function Main({ email, onSignOut }: { email: string; onSignOut: () => void }) {
     return () => document.removeEventListener("visibilitychange", onVis);
   }, [reload]);
 
-  // Handle URL params written by the service worker on notification tap:
-  //   ?snooze=<id>               → open snooze sheet (iPhone bare tap)
-  //   ?action=snooze&item=<id>   → snooze 10 min immediately (Android action button)
-  //   ?action=done&item=<id>     → mark done immediately (Android action button)
+  // Read URL params exactly once on mount so re-renders don't lose them after replaceState.
+  // ?snooze=<id>               → open snooze sheet (iPhone bare tap)
+  // ?action=snooze&item=<id>   → snooze 10 min immediately (Android action button)
+  // ?action=done&item=<id>     → mark done immediately (Android action button)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const snoozeId = params.get("snooze");
-    const actionParam = params.get("action");
-    const itemId = params.get("item");
-    if (!snoozeId && !actionParam) return;
-    window.history.replaceState({}, "", window.location.pathname);
-    const handle = setInterval(() => {
-      if (loading) return;
-      clearInterval(handle);
-      if (snoozeId) {
-        const target = items.find((i) => i.id === snoozeId);
-        if (target) setSnoozeTarget(target);
-      } else if (actionParam === "done" && itemId) {
-        const target = items.find((i) => i.id === itemId);
-        if (target) done(target);
-      } else if (actionParam === "snooze" && itemId) {
-        store.snooze(itemId, new Date(Date.now() + 10 * 60_000).toISOString()).then(reload);
-      }
-    }, 200);
-    return () => clearInterval(handle);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items, loading]);
+    const snoozeId = params.get("snooze") ?? undefined;
+    const action   = params.get("action") ?? undefined;
+    const itemId   = params.get("item")   ?? undefined;
+    if (snoozeId || action) {
+      pendingActionRef.current = { snoozeId, action, itemId };
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, []);
+
+  // Act on a pending URL action once items have finished loading.
+  useEffect(() => {
+    if (loading || !pendingActionRef.current) return;
+    const { snoozeId, action, itemId } = pendingActionRef.current;
+    pendingActionRef.current = null;
+    if (snoozeId) {
+      const target = items.find((i) => i.id === snoozeId);
+      if (target) setSnoozeTarget(target);
+    } else if (action === "done" && itemId) {
+      const target = items.find((i) => i.id === itemId);
+      if (target) done(target);
+    } else if (action === "snooze" && itemId) {
+      store.snooze(itemId, new Date(Date.now() + 10 * 60_000).toISOString()).then(reload);
+    }
+  }, [items, loading]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const today = todayLocal();
 
@@ -227,7 +231,7 @@ function Main({ email, onSignOut }: { email: string; onSignOut: () => void }) {
             >
               ✓
             </button>
-            {(group === "now" || group === "today") && (
+            {group === "now" && (
               <button
                 className="snooze"
                 aria-label={`Snooze ${i.name}`}

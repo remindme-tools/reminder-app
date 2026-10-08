@@ -135,24 +135,41 @@ describe("isRepeating with new units", () => {
 describe("dueGroup", () => {
   const now = new Date("2026-10-07T14:00:00Z");
   it("overdue → now", () => {
-    expect(dueGroup({ due_date: "2026-10-07", due_at: "2026-10-07T09:00:00.000Z" }, now)).toBe("now");
+    expect(dueGroup({ due_date: "2026-10-07", due_at: "2026-10-07T09:00:00.000Z", snoozed_until: null }, now)).toBe("now");
   });
   it("later today → today", () => {
-    expect(dueGroup({ due_date: "2026-10-07", due_at: "2026-10-07T18:00:00.000Z" }, now)).toBe("today");
+    expect(dueGroup({ due_date: "2026-10-07", due_at: "2026-10-07T18:00:00.000Z", snoozed_until: null }, now)).toBe("today");
   });
   it("3 days away → week", () => {
-    expect(dueGroup({ due_date: "2026-10-10", due_at: "2026-10-10T09:00:00.000Z" }, now)).toBe("week");
+    expect(dueGroup({ due_date: "2026-10-10", due_at: "2026-10-10T09:00:00.000Z", snoozed_until: null }, now)).toBe("week");
   });
   it("8 days away → later", () => {
-    expect(dueGroup({ due_date: "2026-10-15", due_at: "2026-10-15T09:00:00.000Z" }, now)).toBe("later");
+    expect(dueGroup({ due_date: "2026-10-15", due_at: "2026-10-15T09:00:00.000Z", snoozed_until: null }, now)).toBe("later");
   });
   it("null due_at falls back to 09:00 local — treated as group based on local time", () => {
     // due_date tomorrow with no due_at: falls back to tomorrow at 09:00 local → "week"
     const tomorrow = new Date(now);
     tomorrow.setDate(tomorrow.getDate() + 1);
     const d = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth()+1).padStart(2,"0")}-${String(tomorrow.getDate()).padStart(2,"0")}`;
-    const grp = dueGroup({ due_date: d, due_at: null }, now);
+    const grp = dueGroup({ due_date: d, due_at: null, snoozed_until: null }, now);
     expect(["today", "week"]).toContain(grp); // depends on local tz offset
+  });
+  it("overdue item with active snooze is NOT in 'now'", () => {
+    // Item was due at 09:00, now is 14:00 → normally "now", but snoozed until 16:00
+    const item = {
+      due_date: "2026-10-07",
+      due_at: "2026-10-07T09:00:00.000Z",
+      snoozed_until: "2026-10-07T16:00:00.000Z", // still in the future at 14:00Z
+    };
+    expect(dueGroup(item, now)).toBe("today");
+  });
+  it("overdue item with expired snooze IS in 'now'", () => {
+    const item = {
+      due_date: "2026-10-07",
+      due_at: "2026-10-07T09:00:00.000Z",
+      snoozed_until: "2026-10-07T12:00:00.000Z", // expired before now (14:00Z)
+    };
+    expect(dueGroup(item, now)).toBe("now");
   });
 });
 
