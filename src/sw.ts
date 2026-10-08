@@ -13,13 +13,43 @@ self.addEventListener("message", (e) => {
 self.addEventListener("push", (event) => {
   const data = event.data?.json() ?? { title: "Remind Me", body: "You have items due." };
   event.waitUntil(
-    self.registration.showNotification(data.title, { body: data.body, icon: "icon-192.png", badge: "icon-192.png", tag: "daily" })
+    self.registration.showNotification(data.title, {
+      body: data.body,
+      icon: "icon-192.png",
+      badge: "icon-192.png",
+      // Per-item tag prevents stacking duplicate notifications for the same reminder
+      tag: data.tag ?? "remindme",
+      data: data.data ?? {},
+      // Action buttons shown on Android and desktop Chrome; silently ignored on iOS
+      actions: [
+        { action: "snooze", title: "Snooze 10 min" },
+        { action: "done",   title: "Done" },
+      ],
+    })
   );
 });
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
+  const itemId = (event.notification.data as { itemId?: string })?.itemId;
+  const action = (event as NotificationEvent & { action?: string }).action;
+
+  // Build the URL to navigate to:
+  //   bare tap (no action) → open snooze sheet for this item
+  //   snooze action        → snooze 10 min immediately via URL param
+  //   done action          → mark done immediately via URL param
+  let path = self.registration.scope;
+  if (itemId) {
+    if (action === "snooze") path += `?action=snooze&item=${encodeURIComponent(itemId)}`;
+    else if (action === "done") path += `?action=done&item=${encodeURIComponent(itemId)}`;
+    else path += `?snooze=${encodeURIComponent(itemId)}`;
+  }
+
   event.waitUntil(
-    self.clients.matchAll({ type: "window" }).then((cs) => (cs[0] ? cs[0].focus() : self.clients.openWindow(self.registration.scope)))
+    self.clients.matchAll({ type: "window" }).then((cs) => {
+      const existing = cs.find((c) => c.url.startsWith(self.registration.scope));
+      if (existing) return existing.navigate(path).then((c) => c?.focus());
+      return self.clients.openWindow(path);
+    })
   );
 });
