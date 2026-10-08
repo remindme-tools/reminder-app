@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { store } from "../lib/store";
-import { addInterval, todayLocal } from "../lib/dates";
+import { addInterval, isSpecialUnit, todayLocal } from "../lib/dates";
 import { shrinkPhoto } from "../lib/image";
 import { getCategoryColor } from "../lib/categoryColors";
 import { CATEGORIES, type Item, type ItemInput, type ItemType, type NotifyVia, type RepeatUnit } from "../types";
@@ -17,6 +17,14 @@ const NOTIFY_OPTIONS: { id: NotifyVia; label: string }[] = [
   { id: "push", label: "Push" },
   { id: "both", label: "Both" },
 ];
+
+function localDateString(d: Date): string {
+  return d.toLocaleDateString("en-CA"); // YYYY-MM-DD in local time
+}
+
+function localTimeString(d: Date): string {
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
 
 export default function ItemForm({
   item,
@@ -38,10 +46,15 @@ export default function ItemForm({
   const [type, setType] = useState<ItemType>(item?.type ?? "renewal");
   const [category, setCategory] = useState(item?.category ?? defaultCategory ?? "Home");
   const [due, setDue] = useState(item?.due_date ?? addInterval(today, 1, "months"));
+  const [dueTime, setDueTime] = useState<string>(() => {
+    if (item?.due_at) return localTimeString(new Date(item.due_at));
+    return "09:00";
+  });
+  const [hasTime, setHasTime] = useState(!!item?.due_at);
   const [more, setMore] = useState(!!item);
   const [every, setEvery] = useState<string>(String(item?.repeat_every ?? 1));
   const [unit, setUnit] = useState<RepeatUnit>(item?.repeat_unit ?? "years");
-  const [repeatOn, setRepeatOn] = useState(item ? !!item.repeat_every : true);
+  const [repeatOn, setRepeatOn] = useState(item ? !!(item.repeat_every || isSpecialUnit(item.repeat_unit)) : true);
   const [warn, setWarn] = useState<number[]>(item?.warn_days ?? DEFAULT_WARN[item?.type ?? "renewal"]);
   const [customWarn, setCustomWarn] = useState("");
   const [notifyVia, setNotifyVia] = useState<NotifyVia>(item?.notify_via ?? "both");
@@ -79,18 +92,35 @@ export default function ItemForm({
     }
   }
 
+  function setQuickTime(date: Date) {
+    setDue(localDateString(date));
+    setDueTime(localTimeString(date));
+    setHasTime(true);
+  }
+
   async function save(e: FormEvent) {
     e.preventDefault();
     const n = parseInt(every, 10);
-    if (repeatOn && !(n > 0)) return setErr("Repeat interval must be 1 or more.");
+    if (repeatOn && !isSpecialUnit(unit) && !(n > 0))
+      return setErr("Repeat interval must be 1 or more.");
     setBusy(true);
     setErr("");
+
+    let due_at: string | null = null;
+    if (hasTime && dueTime) {
+      const [hh, mm] = dueTime.split(":").map(Number);
+      const [yy, mo, dd] = due.split("-").map(Number);
+      due_at = new Date(yy, mo - 1, dd, hh, mm, 0).toISOString();
+    }
+
     const input: ItemInput = {
       name: name.trim(),
       category,
       type,
       due_date: due,
-      repeat_every: repeatOn ? n : null,
+      due_at,
+      snoozed_until: item?.snoozed_until ?? null,
+      repeat_every: repeatOn && !isSpecialUnit(unit) ? n : null,
       repeat_unit: repeatOn ? unit : null,
       warn_days: warn,
       notes,
@@ -113,14 +143,6 @@ export default function ItemForm({
     await store.remove(item.id);
     onSaved();
   }
-
-  const quick: [string, string][] = [
-    ["Today", today],
-    ["1 week", addInterval(today, 1, "weeks")],
-    ["1 month", addInterval(today, 1, "months")],
-    ["3 months", addInterval(today, 3, "months")],
-    ["1 year", addInterval(today, 1, "years")],
-  ];
 
   return (
     <div className="sheet-bg" onClick={onClose}>
@@ -147,15 +169,41 @@ export default function ItemForm({
         </div>
         <div className="hint">{TYPES.find((t) => t.id === type)!.hint}</div>
 
-        <div className="lbl">Due date</div>
+        <div className="lbl">When</div>
         <div className="chips scroll">
-          {quick.map(([l, d]) => (
-            <button type="button" key={l} className={`chip ${due === d ? "on" : ""}`} onClick={() => setDue(d)}>
-              {l}
-            </button>
-          ))}
+          <button type="button" className="chip" onClick={() => setQuickTime(new Date(Date.now() + 10 * 60_000))}>
+            In 10 min
+          </button>
+          <button type="button" className="chip" onClick={() => setQuickTime(new Date(Date.now() + 3_600_000))}>
+            In 1 hour
+          </button>
+          <button type="button" className="chip" onClick={() => {
+            const d = new Date(); d.setHours(18, 0, 0, 0);
+            setQuickTime(d);
+          }}>
+            This evening
+          </button>
+          <button type="button" className="chip" onClick={() => {
+            const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(9, 0, 0, 0);
+            setQuickTime(d);
+          }}>
+            Tomorrow morning
+          </button>
         </div>
-        <input type="date" required value={due} onChange={(e) => setDue(e.target.value)} />
+        <div className="inline">
+          <input type="date" required value={due} onChange={(e) => setDue(e.target.value)} />
+          <input
+            type="time"
+            value={hasTime ? dueTime : ""}
+            placeholder="Time (opt.)"
+            onChange={(e) => { setDueTime(e.target.value); setHasTime(true); }}
+          />
+        </div>
+        {hasTime && (
+          <button type="button" className="ghost" style={{ fontSize: "0.8em" }} onClick={() => setHasTime(false)}>
+            Clear time
+          </button>
+        )}
 
         <div className="lbl">Category</div>
         <div className="chips scroll">
@@ -186,13 +234,21 @@ export default function ItemForm({
             </label>
             {repeatOn && (
               <div className="inline">
-                <span>Every</span>
-                <input type="number" min={1} inputMode="numeric" value={every} onChange={(e) => setEvery(e.target.value)} />
+                {!isSpecialUnit(unit) && (
+                  <>
+                    <span>Every</span>
+                    <input type="number" min={1} inputMode="numeric" value={every} onChange={(e) => setEvery(e.target.value)} />
+                  </>
+                )}
                 <select value={unit} onChange={(e) => setUnit(e.target.value as RepeatUnit)}>
+                  <option value="minutes">minutes</option>
+                  <option value="hours">hours</option>
                   <option value="days">days</option>
                   <option value="weeks">weeks</option>
                   <option value="months">months</option>
                   <option value="years">years</option>
+                  <option value="last_day_of_month">last day of month</option>
+                  <option value="first_day_of_month">first day of month</option>
                 </select>
               </div>
             )}
