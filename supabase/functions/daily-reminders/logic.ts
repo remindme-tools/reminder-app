@@ -7,6 +7,7 @@ export interface DueItem {
   due_date: string; // YYYY-MM-DD
   warn_days: number[];
   cost: number | null;
+  notify_via?: string; // 'email' | 'push' | 'both' — undefined treated as 'both'
 }
 
 export type Reason = "overdue" | "due" | "warning";

@@ -41,9 +41,13 @@ Deno.serve(async (req) => {
       const sameDay = log?.sent_on === today;
       if (!send && !force) continue;
 
-      const { data: items } = await db.from("items").select("name,category,due_date,warn_days,cost").eq("user_id", u.id).is("done_at", null);
-      const digest = buildDigest((items ?? []) as DueItem[], today);
-      if (!digest) continue;
+      const { data: items } = await db.from("items").select("name,category,due_date,warn_days,cost,notify_via").eq("user_id", u.id).is("done_at", null);
+      const allItems = (items ?? []) as DueItem[];
+      const emailItems = allItems.filter((i) => !i.notify_via || i.notify_via === "email" || i.notify_via === "both");
+      const pushItems  = allItems.filter((i) => !i.notify_via || i.notify_via === "push"  || i.notify_via === "both");
+      const digest = buildDigest(emailItems, today);
+      const pushDigest = buildDigest(pushItems, today);
+      if (!digest && !pushDigest) continue;
 
       const wantEmail = (profile?.email_reminders ?? true) && !!u.email;
       const row: Record<string, unknown> = { user: u.email, subject: digest.subject, count: digest.count };
@@ -58,11 +62,11 @@ Deno.serve(async (req) => {
         await sendEmail(u.email!, digest.subject, digest.html, digest.text);
         emailSent = true;
       }
-      if (pushOn && !pushSent) {
+      if (pushOn && !pushSent && pushDigest) {
         const { data: subs } = await db.from("push_subscriptions").select("endpoint,subscription").eq("user_id", u.id);
         for (const s of subs ?? []) {
           try {
-            await webpush.sendNotification(s.subscription, JSON.stringify({ title: digest.pushTitle, body: digest.pushBody }));
+            await webpush.sendNotification(s.subscription, JSON.stringify({ title: pushDigest.pushTitle, body: pushDigest.pushBody }));
             pushSent = true;
           } catch (e) {
             const code = (e as { statusCode?: number }).statusCode;

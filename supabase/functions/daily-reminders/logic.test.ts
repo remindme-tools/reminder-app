@@ -35,3 +35,28 @@ describe("time zones", () => {
     expect(shouldSendNow("UTC", "2026-10-06", new Date("2026-10-06T09:00:00Z")).send).toBe(false);
   });
 });
+
+describe("buildDigest respects notify_via pre-filtering", () => {
+  const today = "2026-10-07";
+  const allItems = [
+    { name: "A", category: "Home",  due_date: "2026-10-07", warn_days: [], cost: null, notify_via: "email" },
+    { name: "B", category: "Car",   due_date: "2026-10-07", warn_days: [], cost: null, notify_via: "push" },
+    { name: "C", category: "Other", due_date: "2026-10-07", warn_days: [], cost: null, notify_via: "both" },
+  ];
+  it("emailItems digest contains email and both items only", () => {
+    const emailItems = allItems.filter((i) => !i.notify_via || i.notify_via === "email" || i.notify_via === "both");
+    const d = buildDigest(emailItems, today);
+    expect(d?.count).toBe(2);
+    expect(d?.text).toContain("A");
+    expect(d?.text).toContain("C");
+    expect(d?.text).not.toContain("B");
+  });
+  it("pushItems digest contains push and both items only", () => {
+    const pushItems = allItems.filter((i) => !i.notify_via || i.notify_via === "push" || i.notify_via === "both");
+    const d = buildDigest(pushItems, today);
+    expect(d?.count).toBe(2);
+    expect(d?.text).toContain("B");
+    expect(d?.text).toContain("C");
+    expect(d?.text).not.toContain("A");
+  });
+});
