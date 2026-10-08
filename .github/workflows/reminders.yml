@@ -1,8 +1,7 @@
-# Runs every hour. The function itself decides who is due a message (7am in each person's time zone).
-name: Send reminders
+# Manual test button for the daily-reminders function.
+# pg_cron fires the function every minute; this workflow is kept only for manual testing.
+name: Test reminder function (manual)
 on:
-  schedule:
-    - cron: "17 * * * *"
   workflow_dispatch:
 jobs:
   run:
