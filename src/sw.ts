@@ -12,21 +12,19 @@ self.addEventListener("message", (e) => {
 
 self.addEventListener("push", (event) => {
   const data = event.data?.json() ?? { title: "Remind Me", body: "You have items due." };
-  event.waitUntil(
-    self.registration.showNotification(data.title, {
-      body: data.body,
-      icon: "icon-192.png",
-      badge: "icon-192.png",
-      // Per-item tag prevents stacking duplicate notifications for the same reminder
-      tag: data.tag ?? "remindme",
-      data: data.data ?? {},
-      // Action buttons shown on Android and desktop Chrome; silently ignored on iOS
-      actions: [
-        { action: "snooze", title: "Snooze 10 min" },
-        { action: "done",   title: "Done" },
-      ],
-    })
-  );
+  // `actions` is a SW-only extension not in the standard NotificationOptions type
+  const opts = {
+    body: data.body,
+    icon: "icon-192.png",
+    badge: "icon-192.png",
+    tag: data.tag ?? "remindme",
+    data: data.data ?? {},
+    actions: [
+      { action: "snooze", title: "Snooze 10 min" },
+      { action: "done",   title: "Done" },
+    ],
+  } as NotificationOptions;
+  event.waitUntil(self.registration.showNotification(data.title, opts));
 });
 
 self.addEventListener("notificationclick", (event) => {
