@@ -2,7 +2,8 @@ import { useEffect, useState, type FormEvent } from "react";
 import { store } from "../lib/store";
 import { addInterval, todayLocal } from "../lib/dates";
 import { shrinkPhoto } from "../lib/image";
-import { CATEGORIES, type Item, type ItemType, type RepeatUnit } from "../types";
+import { getCategoryColor } from "../lib/categoryColors";
+import { CATEGORIES, type Item, type ItemInput, type ItemType, type NotifyVia, type RepeatUnit } from "../types";
 
 const TYPES: { id: ItemType; label: string; hint: string }[] = [
   { id: "renewal", label: "Renewal", hint: "Insurance, subscriptions, registration" },
@@ -11,20 +12,29 @@ const TYPES: { id: ItemType; label: string; hint: string }[] = [
 ];
 const DEFAULT_WARN: Record<ItemType, number[]> = { renewal: [30, 7, 1], expiry: [30, 7, 1], repeating: [3, 1] };
 const WARN_CHOICES = [60, 30, 14, 7, 3, 1, 0];
+const NOTIFY_OPTIONS: { id: NotifyVia; label: string }[] = [
+  { id: "email", label: "Email" },
+  { id: "push", label: "Push" },
+  { id: "both", label: "Both" },
+];
 
 export default function ItemForm({
   item,
+  defaultName,
   defaultCategory,
+  categoryColors = {},
   onClose,
   onSaved,
 }: {
   item: Item | null;
+  defaultName?: string;
   defaultCategory?: string;
+  categoryColors?: Record<string, string>;
   onClose: () => void;
   onSaved: () => void;
 }) {
   const today = todayLocal();
-  const [name, setName] = useState(item?.name ?? "");
+  const [name, setName] = useState(item?.name ?? defaultName ?? "");
   const [type, setType] = useState<ItemType>(item?.type ?? "renewal");
   const [category, setCategory] = useState(item?.category ?? defaultCategory ?? "Home");
   const [due, setDue] = useState(item?.due_date ?? addInterval(today, 1, "months"));
@@ -34,6 +44,7 @@ export default function ItemForm({
   const [repeatOn, setRepeatOn] = useState(item ? !!item.repeat_every : true);
   const [warn, setWarn] = useState<number[]>(item?.warn_days ?? DEFAULT_WARN[item?.type ?? "renewal"]);
   const [customWarn, setCustomWarn] = useState("");
+  const [notifyVia, setNotifyVia] = useState<NotifyVia>(item?.notify_via ?? "both");
   const [notes, setNotes] = useState(item?.notes ?? "");
   const [cost, setCost] = useState(item?.cost != null ? String(item.cost) : "");
   const [photo, setPhoto] = useState<string | null>(item?.photo_path ?? null);
@@ -50,18 +61,13 @@ export default function ItemForm({
     setType(t);
     if (item) return;
     setWarn(DEFAULT_WARN[t]);
-    if (t === "repeating") {
-      setRepeatOn(true);
-      setEvery("3");
-      setUnit("months");
-    } else if (t === "renewal") {
-      setRepeatOn(true);
-      setEvery("1");
-      setUnit("years");
-    } else setRepeatOn(false);
+    if (t === "repeating") { setRepeatOn(true); setEvery("3"); setUnit("months"); }
+    else if (t === "renewal") { setRepeatOn(true); setEvery("1"); setUnit("years"); }
+    else setRepeatOn(false);
   }
 
-  const toggleWarn = (d: number) => setWarn((w) => (w.includes(d) ? w.filter((x) => x !== d) : [...w, d].sort((a, b) => b - a)));
+  const toggleWarn = (d: number) =>
+    setWarn((w) => (w.includes(d) ? w.filter((x) => x !== d) : [...w, d].sort((a, b) => b - a)));
   const choices = Array.from(new Set([...WARN_CHOICES, ...warn])).sort((a, b) => b - a);
 
   async function onPhoto(file?: File) {
@@ -69,7 +75,7 @@ export default function ItemForm({
     try {
       setPhoto(await store.uploadPhoto(await shrinkPhoto(file)));
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Photo upload failed");
+      setErr(e instanceof Error ? e.message : "Photo upload failed. Please try again.");
     }
   }
 
@@ -79,7 +85,7 @@ export default function ItemForm({
     if (repeatOn && !(n > 0)) return setErr("Repeat interval must be 1 or more.");
     setBusy(true);
     setErr("");
-    const input = {
+    const input: ItemInput = {
       name: name.trim(),
       category,
       type,
@@ -90,13 +96,14 @@ export default function ItemForm({
       notes,
       cost: cost.trim() === "" ? null : Number(cost),
       photo_path: photo,
+      notify_via: notifyVia,
     };
     try {
       if (item) await store.update(item.id, input);
       else await store.create(input);
       onSaved();
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Could not save");
+      setErr(e instanceof Error ? e.message : "Could not save. Please try again.");
       setBusy(false);
     }
   }
@@ -119,7 +126,7 @@ export default function ItemForm({
     <div className="sheet-bg" onClick={onClose}>
       <form className="sheet" onClick={(e) => e.stopPropagation()} onSubmit={save}>
         <div className="grab" />
-        <h2>{item ? "Edit item" : "New reminder"}</h2>
+        <h2>{item ? "Edit reminder" : "New reminder"}</h2>
 
         <input
           className="big"
@@ -153,7 +160,13 @@ export default function ItemForm({
         <div className="lbl">Category</div>
         <div className="chips scroll">
           {Array.from(new Set([...CATEGORIES, category])).map((c) => (
-            <button type="button" key={c} className={`chip ${category === c ? "on" : ""}`} onClick={() => setCategory(c)}>
+            <button
+              type="button"
+              key={c}
+              className={`chip ${category === c ? "on" : ""}`}
+              onClick={() => setCategory(c)}
+            >
+              <span className="chip-dot" style={{ background: getCategoryColor(c, categoryColors) }} />
               {c}
             </button>
           ))}
@@ -161,7 +174,7 @@ export default function ItemForm({
 
         {!more && (
           <button type="button" className="ghost wide" onClick={() => setMore(true)}>
-            More options: repeat, early warnings, notes, cost, photo
+            More: repeat, notes, cost, photo
           </button>
         )}
 
@@ -214,11 +227,38 @@ export default function ItemForm({
               </button>
             </div>
 
+            <div className="lbl">Notify me by</div>
+            <div className="seg">
+              {NOTIFY_OPTIONS.map((o) => (
+                <button
+                  type="button"
+                  key={o.id}
+                  className={notifyVia === o.id ? "on" : ""}
+                  onClick={() => setNotifyVia(o.id)}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+
             <div className="lbl">Cost</div>
-            <input type="number" step="0.01" min={0} inputMode="decimal" placeholder="Optional" value={cost} onChange={(e) => setCost(e.target.value)} />
+            <input
+              type="number"
+              step="0.01"
+              min={0}
+              inputMode="decimal"
+              placeholder="Optional"
+              value={cost}
+              onChange={(e) => setCost(e.target.value)}
+            />
 
             <div className="lbl">Notes</div>
-            <textarea rows={3} placeholder="Policy number, where to renew…" value={notes} onChange={(e) => setNotes(e.target.value)} />
+            <textarea
+              rows={3}
+              placeholder="Policy number, where to renew…"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+            />
 
             <div className="lbl">Photo</div>
             {photoView && <img className="photo" src={photoView} alt="Attached" />}
