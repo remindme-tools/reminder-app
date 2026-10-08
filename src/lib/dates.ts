@@ -75,7 +75,7 @@ export function reminderReason(
 export function describeDue(days: number): string {
   if (days < -1) return `${-days} days overdue`;
   if (days === -1) return "1 day overdue";
-  if (days === 0) return "Due today";
+  if (days === 0) return "Today";
   if (days === 1) return "Tomorrow";
   if (days < 14) return `In ${days} days`;
   if (days < 60) return `In ${Math.round(days / 7)} weeks`;

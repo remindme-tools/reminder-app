@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addInterval, daysBetween, reminderReason, rollForward, todayLocal } from "./dates";
+import { addInterval, daysBetween, describeDue, reminderReason, rollForward, todayLocal } from "./dates";
 
 describe("addInterval", () => {
   it("adds days and weeks", () => {
@@ -57,5 +57,29 @@ describe("misc", () => {
   });
   it("todayLocal formats", () => {
     expect(todayLocal(new Date(2026, 0, 5))).toBe("2026-01-05");
+  });
+});
+
+describe("describeDue", () => {
+  it("returns Today for 0 days", () => {
+    expect(describeDue(0)).toBe("Today");
+  });
+  it("returns Tomorrow for 1 day", () => {
+    expect(describeDue(1)).toBe("Tomorrow");
+  });
+  it("returns overdue text for negative days", () => {
+    expect(describeDue(-1)).toBe("1 day overdue");
+    expect(describeDue(-5)).toBe("5 days overdue");
+  });
+  it("returns In X days for 2-13", () => {
+    expect(describeDue(7)).toBe("In 7 days");
+    expect(describeDue(13)).toBe("In 13 days");
+  });
+  it("returns In X weeks for 14-59", () => {
+    expect(describeDue(14)).toBe("In 2 weeks");
+    expect(describeDue(28)).toBe("In 4 weeks");
+  });
+  it("returns In X months for 60+", () => {
+    expect(describeDue(90)).toBe("In 3 months");
   });
 });
